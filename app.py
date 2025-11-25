@@ -3,69 +3,57 @@ import requests
 import subprocess
 import random
 import json
+import time
 from flask import Flask, request, Response, stream_with_context
+from ytmusicapi import YTMusic
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# 1. Danh sách Piped (Dùng để tìm tên bài hát)
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.gl",
-    "https://pipedapi.drgns.space",
-    "https://pa.il.ax",
-    "https://pipedapi.adminforge.de"
-]
+# Khởi tạo YouTube Music API
+ytmusic = YTMusic()
 
-# 2. Danh sách Cobalt (Dùng để tải nhạc) - CẬP NHẬT MỚI
+# DANH SÁCH COBALT SERVERS (Cập nhật mới nhất & Nhiều nhất)
 COBALT_INSTANCES = [
     "https://cobalt.pub",
     "https://api.cobalt.best",
     "https://co.wuk.sh",
     "https://cobalt.tools",
     "https://cobalt.xy24.eu.org",
+    "https://api.cobalt.kp.fyi",
     "https://cobalt.kwiatekmiki.pl",
-    "https://api.cobalt.kp.fyi" 
+    "https://cobalt.lacus.live",
+    "https://cobalt.synced.is",
+    "https://cobalt.bowring.uk",
+    "https://cobalt.repl.co" 
 ]
 
-def search_with_piped(query):
-    """
-    Tìm link YouTube thông qua Piped API
-    """
-    instances = PIPED_INSTANCES.copy()
-    random.shuffle(instances)
-
-    for instance in instances:
-        try:
-            logging.info(f"🔍 Đang tìm trên Piped: {instance}")
-            url = f"{instance}/search"
-            params = {'q': query, 'filter': 'videos'}
+def search_with_ytmusic(query):
+    """Tìm link bài hát qua YouTube Music"""
+    try:
+        logging.info(f"🔍 Đang tìm: {query}")
+        results = ytmusic.search(query, filter='songs')
+        if results:
+            video_id = results[0].get('videoId')
+            title = results[0].get('title')
+            if video_id:
+                link = f"https://www.youtube.com/watch?v={video_id}"
+                logging.info(f"✅ Tìm thấy: {title} ({link})")
+                return link
+        
+        # Fallback: Tìm video thường nếu không ra bài hát
+        results = ytmusic.search(query, filter='videos')
+        if results:
+            video_id = results[0].get('videoId')
+            if video_id: return f"https://www.youtube.com/watch?v={video_id}"
             
-            resp = requests.get(url, params=params, timeout=5)
-            
-            if resp.status_code == 200:
-                try:
-                    data = resp.json()
-                    items = data.get('items', [])
-                    if len(items) > 0:
-                        for video in items:
-                            video_url = video.get('url')
-                            title = video.get('title')
-                            if video_url:
-                                full_link = f"https://www.youtube.com{video_url}"
-                                logging.info(f"✅ Đã tìm thấy: {title}")
-                                return full_link
-                except:
-                    continue
-        except Exception:
-            continue
-            
+    except Exception as e:
+        logging.error(f"❌ Lỗi tìm kiếm: {e}")
     return None
 
 def get_audio_stream_from_cobalt(url):
-    """
-    Lấy link tải MP3 từ Cobalt (Có chống lỗi JSON)
-    """
+    """Lấy link tải MP3 từ danh sách Cobalt (Thử từng cái một)"""
+    
     payload = {
         "url": url,
         "vCodec": "h264",
@@ -74,49 +62,42 @@ def get_audio_stream_from_cobalt(url):
         "isAudioOnly": True
     }
     
-    # Headers giả lập trình duyệt để tránh bị chặn
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
+    # Xáo trộn danh sách để cân bằng tải
     instances = COBALT_INSTANCES.copy()
-    random.shuffle(instances) # Chọn ngẫu nhiên để giảm tải
+    random.shuffle(instances)
 
     for instance in instances:
         try:
-            logging.info(f"⬇️ Thử tải từ Cobalt: {instance}")
-            response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=10)
+            # logging.info(f"➡️ Thử server: {instance}")
+            response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=8)
             
             if response.status_code == 200:
-                try:
-                    data = response.json() # <--- Chỗ này hay bị lỗi nếu server trả về HTML
-                    
-                    # Cobalt trả về link ở nhiều dạng khác nhau
-                    if 'url' in data: 
-                        return data['url']
-                    elif 'picker' in data:
-                        for item in data['picker']:
-                            if 'url' in item: return item['url']
-                    elif 'audio' in data:
-                        return data['audio']
-                        
-                except json.JSONDecodeError:
-                    logging.warning(f"⚠️ {instance} trả về dữ liệu rác, thử server khác.")
-                    continue
-            else:
-                logging.warning(f"⚠️ {instance} lỗi code: {response.status_code}")
+                data = response.json()
                 
-        except Exception as e:
-            logging.error(f"❌ Lỗi kết nối {instance}")
+                # Xử lý các kiểu trả về khác nhau của Cobalt
+                if 'url' in data: return data['url']
+                if 'picker' in data:
+                    for item in data['picker']:
+                        if 'url' in item: return item['url']
+                if 'audio' in data: return data['audio']
+                
+            # Nếu server này lỗi, thử cái tiếp theo ngay
+            continue
+            
+        except Exception:
             continue
             
     return None
 
 @app.route('/')
 def home():
-    return "Xiaozhi Music Server (Super Stable Edition) is Running!"
+    return "Xiaozhi Music Server (Ultimate Edition) is Running!"
 
 @app.route('/stream')
 def stream_music():
@@ -125,33 +106,31 @@ def stream_music():
     
     youtube_link = query
     
-    # 1. Tìm kiếm (Nếu không phải là link)
+    # 1. Tìm kiếm
     if not query.startswith("http"):
-         found_link = search_with_piped(query)
+         found_link = search_with_ytmusic(query)
          if found_link: 
              youtube_link = found_link
          else: 
-             return "Không tìm thấy bài hát (Piped bận).", 404
+             return "Không tìm thấy bài hát.", 404
 
-    # 2. Lấy link tải
-    audio_url = get_audio_stream_from_cobalt(youtube_link)
+    # 2. Lấy link tải (Thử tối đa 3 lần nếu thất bại)
+    audio_url = None
+    for _ in range(3):
+        audio_url = get_audio_stream_from_cobalt(youtube_link)
+        if audio_url: break
+        time.sleep(1) # Nghỉ 1 giây rồi thử lại
     
     if not audio_url: 
-        return "Tất cả server Cobalt đều đang bận, vui lòng thử lại sau.", 404
+        return "Server quá tải, không lấy được nhạc.", 404
 
-    logging.info(f"🎶 Bắt đầu stream từ: {audio_url}")
+    logging.info(f"🎶 Stream từ: {audio_url}")
 
-    # 3. Chuyển đổi sang PCM cho Robot
+    # 3. Convert sang PCM
     ffmpeg_cmd = [
-        'ffmpeg', 
-        '-re', 
-        '-i', audio_url, 
-        '-f', 's16le', 
-        '-acodec', 'pcm_s16le', 
-        '-ar', '16000', 
-        '-ac', '1', 
-        '-vn', 
-        '-'
+        'ffmpeg', '-re', '-i', audio_url, 
+        '-f', 's16le', '-acodec', 'pcm_s16le', 
+        '-ar', '16000', '-ac', '1', '-vn', '-'
     ]
     
     def generate():

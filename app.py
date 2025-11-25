@@ -1,48 +1,65 @@
 import logging
 import requests
 import subprocess
+import random
 from flask import Flask, request, Response, stream_with_context
-from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Danh sách các Cobalt Instance
-COBALT_INSTANCES = [
-    "[https://cobalt.pub](https://cobalt.pub)",
-    "[https://api.cobalt.best](https://api.cobalt.best)",
-    "[https://co.wuk.sh](https://co.wuk.sh)",
-    "[https://cobalt.tools](https://cobalt.tools)"
+# Danh sách các Invidious Instances (Server tìm kiếm YouTube ẩn danh)
+# Nếu một cái chết, code sẽ tự nhảy sang cái khác
+INVIDIOUS_INSTANCES = [
+    "https://inv.tux.pizza",
+    "https://vid.puffyan.us",
+    "https://yt.artemislena.eu",
+    "https://invidious.flokinet.to",
+    "https://invidious.projectsegfau.lt"
 ]
 
-def search_youtube_video(query):
+# Danh sách Cobalt để tải nhạc
+COBALT_INSTANCES = [
+    "https://cobalt.pub",
+    "https://api.cobalt.best",
+    "https://co.wuk.sh",
+    "https://cobalt.tools"
+]
+
+def search_with_invidious(query):
     """
-    Tìm link YouTube thông qua DuckDuckGo (Tránh bị YouTube chặn IP)
+    Tìm link YouTube thông qua Invidious API
     """
-    try:
-        logging.info(f"Đang tìm kiếm qua DuckDuckGo: {query}")
-        # Tìm kiếm video trên youtube thông qua DDG
-        with DDGS() as ddgs:
-            # Tìm kiếm với từ khóa "site:youtube.com [tên bài hát]"
-            results = list(ddgs.videos(f"{query} site:youtube.com", max_results=1))
+    # Xáo trộn danh sách để giảm tải cho một server
+    instances = INVIDIOUS_INSTANCES.copy()
+    random.shuffle(instances)
+
+    for instance in instances:
+        try:
+            logging.info(f"Đang tìm kiếm trên: {instance}")
+            # Gọi API tìm kiếm
+            url = f"{instance}/api/v1/search"
+            params = {'q': query, 'type': 'video', 'sort_by': 'relevance'}
             
-            if results:
-                # Kết quả trả về thường có key 'content' là link video
-                video_url = results[0].get('content')
-                if not video_url:
-                     # Fallback nếu cấu trúc khác
-                     video_url = results[0].get('href')
-                
-                title = results[0].get('title', 'Unknown Title')
-                
-                logging.info(f"Đã tìm thấy: {title} - {video_url}")
-                return video_url, title
-                
-        logging.warning("Không tìm thấy kết quả nào qua DuckDuckGo")
-        return None, None
-    except Exception as e:
-        logging.error(f"Lỗi tìm kiếm DuckDuckGo: {e}")
-        return None, None
+            resp = requests.get(url, params=params, timeout=10)
+            
+            if resp.status_code == 200:
+                results = resp.json()
+                if len(results) > 0:
+                    video = results[0]
+                    video_id = video.get('videoId')
+                    title = video.get('title')
+                    
+                    if video_id:
+                        youtube_link = f"https://www.youtube.com/watch?v={video_id}"
+                        logging.info(f"Đã tìm thấy: {title} ({youtube_link})")
+                        return youtube_link
+            else:
+                logging.warning(f"Instance {instance} lỗi: {resp.status_code}")
+        except Exception as e:
+            logging.error(f"Lỗi kết nối {instance}: {e}")
+            continue
+            
+    return None
 
 def get_audio_stream_from_cobalt(url):
     """
@@ -63,7 +80,6 @@ def get_audio_stream_from_cobalt(url):
 
     for instance in COBALT_INSTANCES:
         try:
-            # logging.info(f"Thử Cobalt: {instance}")
             response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
             
             if response.status_code == 200:
@@ -81,7 +97,7 @@ def get_audio_stream_from_cobalt(url):
 
 @app.route('/')
 def home():
-    return "Xiaozhi Music Server (Final DuckDuckGo Edition) is Live!"
+    return "Xiaozhi Music Server (Invidious Edition) is Running!"
 
 @app.route('/stream')
 def stream_music():
@@ -90,20 +106,20 @@ def stream_music():
     
     youtube_link = query
     
-    # Nếu người dùng nhập tên bài hát (không phải link), thì đi tìm
+    # Nếu không phải link, dùng Invidious để tìm
     if not query.startswith("http"):
-         found_link, found_title = search_youtube_video(query)
+         found_link = search_with_invidious(query)
          if found_link:
              youtube_link = found_link
          else:
-             return "Không tìm thấy bài hát này.", 404
+             return "Xin lỗi, server quá tải không tìm được bài hát này.", 404
 
     logging.info(f"Xử lý link: {youtube_link}")
     
     audio_url = get_audio_stream_from_cobalt(youtube_link)
     
     if not audio_url:
-        return "Server quá tải, không lấy được nhạc.", 404
+        return "Không lấy được link nhạc từ Cobalt.", 404
 
     # Convert sang PCM để Robot hát
     ffmpeg_cmd = [

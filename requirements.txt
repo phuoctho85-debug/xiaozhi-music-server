@@ -2,4 +2,4 @@ flask
 gunicorn
 requests
 flask-cors
-youtube-search-python
+duckduckgo-search>=5.0

@@ -2,8 +2,4 @@ flask
 gunicorn
 requests
 flask-cors
-# Cài bản duckduckgo-search ổn định và các thư viện phụ trợ
-duckduckgo-search>=6.1.0
-typing-extensions
-curl_cffi
-lxml
+

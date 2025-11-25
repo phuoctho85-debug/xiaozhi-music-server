@@ -1,13 +1,13 @@
 import logging
 import requests
 import subprocess
-from flask import Flask, request, jsonify, Response, stream_with_context
-from youtubesearchpython import VideosSearch
+from flask import Flask, request, Response, stream_with_context
+from duckduckgo_search import DDGS
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Danh sách các instance Cobalt công khai
+# Danh sách các Cobalt Instance
 COBALT_INSTANCES = [
     "[https://cobalt.pub](https://cobalt.pub)",
     "[https://api.cobalt.best](https://api.cobalt.best)",
@@ -17,27 +17,36 @@ COBALT_INSTANCES = [
 
 def search_youtube_video(query):
     """
-    Tìm kiếm video đầu tiên trên YouTube dựa vào từ khóa
+    Tìm link YouTube thông qua DuckDuckGo (Tránh bị YouTube chặn IP)
     """
     try:
-        logging.info(f"Đang tìm kiếm YouTube với từ khóa: {query}")
-        videos_search = VideosSearch(query, limit=1)
-        results = videos_search.result()
-        
-        if results['result']:
-            video_info = results['result'][0]
-            title = video_info['title']
-            link = video_info['link']
-            logging.info(f"Đã tìm thấy video: {title} ({link})")
-            return link, title
+        logging.info(f"Đang tìm kiếm qua DuckDuckGo: {query}")
+        # Tìm kiếm video trên youtube thông qua DDG
+        with DDGS() as ddgs:
+            # Tìm kiếm với từ khóa "site:youtube.com [tên bài hát]"
+            results = list(ddgs.videos(f"{query} site:youtube.com", max_results=1))
+            
+            if results:
+                # Kết quả trả về thường có key 'content' là link video
+                video_url = results[0].get('content')
+                if not video_url:
+                     # Fallback nếu cấu trúc khác
+                     video_url = results[0].get('href')
+                
+                title = results[0].get('title', 'Unknown Title')
+                
+                logging.info(f"Đã tìm thấy: {title} - {video_url}")
+                return video_url, title
+                
+        logging.warning("Không tìm thấy kết quả nào qua DuckDuckGo")
         return None, None
     except Exception as e:
-        logging.error(f"Lỗi tìm kiếm YouTube: {e}")
+        logging.error(f"Lỗi tìm kiếm DuckDuckGo: {e}")
         return None, None
 
 def get_audio_stream_from_cobalt(url):
     """
-    Gửi link YouTube sang Cobalt để lấy link tải MP3
+    Lấy link tải MP3 từ Cobalt
     """
     payload = {
         "url": url,
@@ -54,7 +63,7 @@ def get_audio_stream_from_cobalt(url):
 
     for instance in COBALT_INSTANCES:
         try:
-            logging.info(f"Đang thử lấy link từ Cobalt instance: {instance}")
+            # logging.info(f"Thử Cobalt: {instance}")
             response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
             
             if response.status_code == 200:
@@ -65,53 +74,42 @@ def get_audio_stream_from_cobalt(url):
                     for item in data['picker']:
                         if 'url' in item:
                             return item['url']
-            else:
-                logging.warning(f"Instance {instance} trả về lỗi: {response.status_code}")
-        except Exception as e:
-            logging.error(f"Lỗi kết nối đến {instance}: {e}")
+        except Exception:
             continue
     
     return None
 
 @app.route('/')
 def home():
-    return "Xiaozhi Music Server (Cobalt + Search Edition) is Running!"
+    return "Xiaozhi Music Server (Final DuckDuckGo Edition) is Live!"
 
 @app.route('/stream')
 def stream_music():
     query = request.args.get('q')
-    if not query:
-        return "Thiếu tham số q", 400
+    if not query: return "Thiếu tên bài hát (q)", 400
     
     youtube_link = query
-    video_title = "Unknown"
-
-    # Nếu query không phải là link, thực hiện tìm kiếm
+    
+    # Nếu người dùng nhập tên bài hát (không phải link), thì đi tìm
     if not query.startswith("http"):
-         youtube_link, video_title = search_youtube_video(query)
-         if not youtube_link:
-             return "Không tìm thấy video nào trên YouTube với từ khóa này", 404
+         found_link, found_title = search_youtube_video(query)
+         if found_link:
+             youtube_link = found_link
+         else:
+             return "Không tìm thấy bài hát này.", 404
 
-    logging.info(f"Đang xử lý link: {youtube_link}")
+    logging.info(f"Xử lý link: {youtube_link}")
     
     audio_url = get_audio_stream_from_cobalt(youtube_link)
     
     if not audio_url:
-        return "Không lấy được link stream từ Cobalt (Server quá tải hoặc video bị chặn)", 404
+        return "Server quá tải, không lấy được nhạc.", 404
 
-    logging.info(f"Đã lấy được link stream MP3: {audio_url}")
-    
-    # Stream và chuyển đổi MP3 sang PCM bằng FFmpeg
+    # Convert sang PCM để Robot hát
     ffmpeg_cmd = [
-        'ffmpeg',
-        '-re',
-        '-i', audio_url,      # Input là link MP3 từ Cobalt
-        '-f', 's16le',        # Output PCM
-        '-acodec', 'pcm_s16le',
-        '-ar', '16000',
-        '-ac', '1',
-        '-vn',
-        '-'
+        'ffmpeg', '-re', '-i', audio_url,
+        '-f', 's16le', '-acodec', 'pcm_s16le',
+        '-ar', '16000', '-ac', '1', '-vn', '-'
     ]
     
     def generate():

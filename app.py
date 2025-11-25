@@ -3,20 +3,13 @@ import requests
 import subprocess
 import random
 from flask import Flask, request, Response, stream_with_context
+from ytmusicapi import YTMusic
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Danh sách các Piped Instances (Thay thế cho Invidious)
-# Piped thường ổn định hơn cho việc tìm kiếm
-PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.gl",
-    "https://pipedapi.adminforge.de",
-    "https://api.piped.privacy.com.de",
-    "https://pipedapi.drgns.space",
-    "https://pa.il.ax"
-]
+# Khởi tạo YouTube Music API
+ytmusic = YTMusic()
 
 # Danh sách Cobalt để tải nhạc
 COBALT_INSTANCES = [
@@ -26,39 +19,37 @@ COBALT_INSTANCES = [
     "https://cobalt.tools"
 ]
 
-def search_with_piped(query):
+def search_with_ytmusic(query):
     """
-    Tìm link YouTube thông qua Piped API
+    Tìm link bài hát thông qua YouTube Music API
     """
-    instances = PIPED_INSTANCES.copy()
-    random.shuffle(instances)
+    try:
+        logging.info(f"🔍 Đang tìm trên YouTube Music: {query}")
+        # Tìm kiếm bài hát (filter=songs để ra kết quả chính xác nhất)
+        results = ytmusic.search(query, filter='songs')
+        
+        if results and len(results) > 0:
+            # Lấy kết quả đầu tiên
+            song = results[0]
+            video_id = song.get('videoId')
+            title = song.get('title')
+            
+            if video_id:
+                full_link = f"https://www.youtube.com/watch?v={video_id}"
+                logging.info(f"✅ Đã tìm thấy: {title} ({full_link})")
+                return full_link
+        
+        # Nếu không tìm thấy bài hát, thử tìm video thường
+        results = ytmusic.search(query, filter='videos')
+        if results and len(results) > 0:
+            video = results[0]
+            video_id = video.get('videoId')
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id}"
 
-    for instance in instances:
-        try:
-            logging.info(f"🔍 Đang tìm kiếm trên Piped: {instance}")
-            url = f"{instance}/search"
-            params = {'q': query, 'filter': 'videos'}
-            
-            # Timeout ngắn để chuyển nhanh nếu lỗi
-            resp = requests.get(url, params=params, timeout=6)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                items = data.get('items', [])
-                if len(items) > 0:
-                    # Lấy video đầu tiên không phải là short
-                    for video in items:
-                        video_url = video.get('url') # Piped trả về đường dẫn /watch?v=...
-                        title = video.get('title')
-                        if video_url:
-                            full_link = f"https://www.youtube.com{video_url}"
-                            logging.info(f"✅ Đã tìm thấy: {title} ({full_link})")
-                            return full_link
-            else:
-                logging.warning(f"⚠️ Instance {instance} lỗi: {resp.status_code}")
-        except Exception as e:
-            logging.error(f"❌ Lỗi kết nối {instance}")
-            continue
+    except Exception as e:
+        logging.error(f"❌ Lỗi tìm kiếm YT Music: {e}")
+        return None
             
     return None
 
@@ -80,7 +71,6 @@ def get_audio_stream_from_cobalt(url):
 
     for instance in instances:
         try:
-            # logging.info(f"Đang tải nhạc từ: {instance}")
             response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
             if response.status_code == 200:
                 data = response.json()
@@ -94,7 +84,7 @@ def get_audio_stream_from_cobalt(url):
 
 @app.route('/')
 def home():
-    return "Xiaozhi Music Server (Piped Edition) is Running!"
+    return "Xiaozhi Music Server (YouTube Music Edition) is Running!"
 
 @app.route('/stream')
 def stream_music():
@@ -103,13 +93,13 @@ def stream_music():
     
     youtube_link = query
     
-    # Nếu không phải link, dùng Piped để tìm
+    # Nếu không phải link, dùng YT Music để tìm
     if not query.startswith("http"):
-         found_link = search_with_piped(query)
+         found_link = search_with_ytmusic(query)
          if found_link: 
              youtube_link = found_link
          else: 
-             return "Xin lỗi, không tìm thấy bài hát (Tất cả server đều bận).", 404
+             return "Xin lỗi, không tìm thấy bài hát này.", 404
 
     # Lấy link tải từ Cobalt
     audio_url = get_audio_stream_from_cobalt(youtube_link)

@@ -1,5 +1,5 @@
-# Sử dụng Python 3.9 bản nhẹ
-FROM python:3.9-slim
+# Sử dụng Python 3.11 bản nhẹ
+FROM python:3.11-slim
 
 # Cập nhật và cài đặt FFmpeg (Quan trọng!)
 RUN apt-get update && \

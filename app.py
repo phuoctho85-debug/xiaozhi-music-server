@@ -1,12 +1,13 @@
 import logging
 import requests
+import subprocess
 from flask import Flask, request, jsonify, Response, stream_with_context
+from youtubesearchpython import VideosSearch
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Danh sách các instance Cobalt công khai
-# Nếu một cái bị lỗi, code sẽ tự thử cái tiếp theo
 COBALT_INSTANCES = [
     "[https://cobalt.pub](https://cobalt.pub)",
     "[https://api.cobalt.best](https://api.cobalt.best)",
@@ -14,10 +15,32 @@ COBALT_INSTANCES = [
     "[https://cobalt.tools](https://cobalt.tools)"
 ]
 
-def get_audio_stream_from_cobalt(query):
-    # Cấu hình request gửi đến Cobalt để lấy MP3
+def search_youtube_video(query):
+    """
+    Tìm kiếm video đầu tiên trên YouTube dựa vào từ khóa
+    """
+    try:
+        logging.info(f"Đang tìm kiếm YouTube với từ khóa: {query}")
+        videos_search = VideosSearch(query, limit=1)
+        results = videos_search.result()
+        
+        if results['result']:
+            video_info = results['result'][0]
+            title = video_info['title']
+            link = video_info['link']
+            logging.info(f"Đã tìm thấy video: {title} ({link})")
+            return link, title
+        return None, None
+    except Exception as e:
+        logging.error(f"Lỗi tìm kiếm YouTube: {e}")
+        return None, None
+
+def get_audio_stream_from_cobalt(url):
+    """
+    Gửi link YouTube sang Cobalt để lấy link tải MP3
+    """
     payload = {
-        "url": query,
+        "url": url,
         "vCodec": "h264",
         "vQuality": "720",
         "aFormat": "mp3",
@@ -31,12 +54,11 @@ def get_audio_stream_from_cobalt(query):
 
     for instance in COBALT_INSTANCES:
         try:
-            logging.info(f"Đang thử lấy link từ: {instance}")
+            logging.info(f"Đang thử lấy link từ Cobalt instance: {instance}")
             response = requests.post(f"{instance}/api/json", json=payload, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
-                # Cobalt trả về link trong trường 'url' hoặc 'picker'
                 if 'url' in data:
                     return data['url']
                 elif 'picker' in data:
@@ -53,7 +75,7 @@ def get_audio_stream_from_cobalt(query):
 
 @app.route('/')
 def home():
-    return "Xiaozhi Music Server (Cobalt Edition) is Running!"
+    return "Xiaozhi Music Server (Cobalt + Search Edition) is Running!"
 
 @app.route('/stream')
 def stream_music():
@@ -61,28 +83,25 @@ def stream_music():
     if not query:
         return "Thiếu tham số q", 400
     
-    # Cobalt yêu cầu link đầy đủ, không hỗ trợ từ khóa
-    # Tạm thời yêu cầu người dùng nhập link youtube
-    if not query.startswith("http"):
-         return "Vui lòng nhập link YouTube đầy đủ (ví dụ: [https://www.youtube.com/watch?v=](https://www.youtube.com/watch?v=)...)", 400
+    youtube_link = query
+    video_title = "Unknown"
 
-    logging.info(f"Đang xử lý link: {query}")
+    # Nếu query không phải là link, thực hiện tìm kiếm
+    if not query.startswith("http"):
+         youtube_link, video_title = search_youtube_video(query)
+         if not youtube_link:
+             return "Không tìm thấy video nào trên YouTube với từ khóa này", 404
+
+    logging.info(f"Đang xử lý link: {youtube_link}")
     
-    audio_url = get_audio_stream_from_cobalt(query)
+    audio_url = get_audio_stream_from_cobalt(youtube_link)
     
     if not audio_url:
-        return "Không lấy được link stream từ Cobalt (Tất cả instance đều bận)", 404
+        return "Không lấy được link stream từ Cobalt (Server quá tải hoặc video bị chặn)", 404
 
-    logging.info(f"Đã lấy được link stream: {audio_url}")
+    logging.info(f"Đã lấy được link stream MP3: {audio_url}")
     
-    # Stream dữ liệu từ link Cobalt về cho client
-    # Lưu ý: Cobalt trả về MP3, không phải PCM. 
-    # Robot cần hỗ trợ giải mã MP3 hoặc server này phải convert lại.
-    # Để đơn giản và tương thích với code robot hiện tại (đang chờ PCM),
-    # ta sẽ dùng FFmpeg để convert MP3 từ Cobalt sang PCM trước khi gửi đi.
-    
-    import subprocess
-    
+    # Stream và chuyển đổi MP3 sang PCM bằng FFmpeg
     ffmpeg_cmd = [
         'ffmpeg',
         '-re',

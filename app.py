@@ -7,7 +7,7 @@ import yt_dlp
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Tạo file cookies tạm từ biến môi trường nếu có
+# Nạp Cookies từ biến môi trường
 if os.environ.get('YOUTUBE_COOKIES'):
     with open('cookies.txt', 'w') as f:
         f.write(os.environ.get('YOUTUBE_COOKIES'))
@@ -18,7 +18,16 @@ def get_youtube_url(query):
         'quiet': True,
         'noplaylist': True,
         'default_search': 'ytsearch1',
-        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None  # Dùng cookies nếu có
+        'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None,
+        # --- THÊM CÁC DÒNG NÀY ĐỂ GIẢ LẬP TRÌNH DUYỆT ---
+        'nocheckcertificate': True,
+        'ignoreerrors': True,
+        'logtostderr': False,
+        'quiet': True,
+        'no_warnings': True,
+        'source_address': '0.0.0.0',
+        # Giả danh iPhone để ít bị chặn hơn
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -34,7 +43,7 @@ def get_youtube_url(query):
     except Exception as e:
         logging.error(f"Lỗi tìm kiếm YouTube: {e}")
         return None, None
-
+        
 @app.route('/')
 def home():
     return "Xiaozhi Music Server is Running!"
